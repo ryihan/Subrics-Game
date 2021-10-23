@@ -59,3 +59,15 @@ namespace Unity.Cloud.Collaborate.Assets
         public const string changeGroupHeaderFormat = "{0} ( {1} )";
         public const string conflictsDetected = "Conflicts detected. Please resolve them before continuing.";
         public const string projectStatusTitleUnbound = "Welcome to Collaborate. Before starting, please click the button below to set a new or existing Unity Project ID for this project. Return to this window once it is set.";
+        public const string projectStatusTitleOffline = "No internet connection.";
+        public const string projectStatusTitleMaintenance = "Undergoing maintenance, please come back later.";
+        public const string projectStatusTitleLoggedOut = "Sign in to access Collaborate.";
+        public const string projectStatusTitleNoSeat = "Ask your project owner for access to Unity Teams.";
+        public const string projectStatusTitleBound = "Welcome to Collaborate. Please click the button below to start.";
+        public const string projectStatusTitleLoading = "Loading, please wait...";
+        public const string projectStatusButtonBound = "Start Collab";
+        public const string projectStatusButtonUnbound = "Set Project ID";
+        public const string projectStatusButtonLoggedOut = "Sign in...";
+        public const string projectStatusButtonNoSeat = "Learn More";
+    }
+}
