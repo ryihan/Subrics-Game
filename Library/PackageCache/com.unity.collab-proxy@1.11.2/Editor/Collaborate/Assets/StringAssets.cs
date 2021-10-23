@@ -32,3 +32,13 @@ namespace Unity.Cloud.Collaborate.Assets
         public const string syncLocalRevisionMessage = "1 revision has been made locally, but hasn't been published to the server. Please sync to ensure these changes are published.";
         public const string syncLocalRevisionsMessage = "{0} revisions have been made locally, but haven't been published to the server. Please sync to ensure these changes are published.";
         public const string sync = "Sync";
+        public const string confirmRollbackTitle = "Collaborate: rollback";
+        public const string confirmRollbackMessage = "Are you sure you want to rollback your project to this revision?";
+        public const string rollback = "Rollback";
+        public const string confirmRollbackDiscardChangesTitle = "Collaborate: rollback and discard changes";
+        public const string confirmRollbackDiscardChangeMessage = "Rollback will irreversibly discard changes to 1 file. Are you sure you want to rollback your project to this revision?";
+        public const string confirmRollbackDiscardChangesMessage = "Rollback will irreversibly discard changes to {0} files. Are you sure you want to rollback your project to this revision?";
+        public const string rollbackAndDiscard = "Discard and rollback";
+        public const string all = "All";
+        public const string includedToPublishByAnotherGitTool = "This file has been included to publish by another Git tool.";
+        public const string viewDiff = "View diff";
