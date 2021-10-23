@@ -18,3 +18,11 @@ namespace Unity.Cloud.Collaborate.Assets
         public const string noticeNoRevisionsToDisplay = "No revisions to display.";
         public const string noticeNoChangesToDisplay = "No changes to display.";
         public const string noticeNoResultsForQuery = "No results found for this query.";
+        public const string publishButton = "Publish";
+        public const string publishSummaryPlaceholder = "Summary";
+        public const string menuDiscardToggledChanges = "Discard toggled changes";
+        public const string cancel = "Cancel";
+        public const string discardChanges = "Discard changes";
+        public const string confirmDiscardChangeMessage = "Are you sure you want to irreversibly discard changes to a file?";
+        public const string confirmDiscardChangesMessage = "Are you sure you want to irreversibly discard changes to {0} files?";
+        public const string confirmDiscardChangesTitle = "Collaborate: discard changes";
