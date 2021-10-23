@@ -26,3 +26,9 @@ namespace Unity.Cloud.Collaborate.Assets
         public const string confirmDiscardChangeMessage = "Are you sure you want to irreversibly discard changes to a file?";
         public const string confirmDiscardChangesMessage = "Are you sure you want to irreversibly discard changes to {0} files?";
         public const string confirmDiscardChangesTitle = "Collaborate: discard changes";
+        public const string search = "Search";
+        public const string syncRemoteRevisionMessage = "1 revision has been published to the server. Please sync to get the latest changes.";
+        public const string syncRemoteRevisionsMessage = "Some revisions have been published to the server. Please sync to get the latest changes.";
+        public const string syncLocalRevisionMessage = "1 revision has been made locally, but hasn't been published to the server. Please sync to ensure these changes are published.";
+        public const string syncLocalRevisionsMessage = "{0} revisions have been made locally, but haven't been published to the server. Please sync to ensure these changes are published.";
+        public const string sync = "Sync";
