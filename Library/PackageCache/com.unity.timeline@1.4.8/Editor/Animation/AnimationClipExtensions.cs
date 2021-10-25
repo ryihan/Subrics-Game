@@ -18,3 +18,17 @@ namespace UnityEditor.Timeline
             return result;
         }
 
+        public static CurveChangeType GetChangeType(this AnimationClip clip, ref UInt64 curveVersion)
+        {
+            var version = clip.ClipVersion();
+            var changeType = CurveChangeType.None;
+            if ((curveVersion >> 32) != (version >> 32))
+                changeType = CurveChangeType.CurveAddedOrRemoved;
+            else if (curveVersion != version)
+                changeType = CurveChangeType.CurveModified;
+
+            curveVersion = version;
+            return changeType;
+        }
+    }
+}
