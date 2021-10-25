@@ -1,0 +1,220 @@
+// Copyright (c) 2009-2012 Turbulenz Limited
+
+#include "platform.cgh"
+
+//
+// Uniform variables
+//
+
+// Distort technique parameters.
+float2 strength;
+float2x3 transform;
+float2x2 invTransform;
+
+// ColorMatrix technique parameters.
+float3x4 colorMatrix;
+
+// Fast blur / bloom parameters.
+float2 sampleRadius;
+
+// Additional bloom parameters.
+float bloomThreshold;
+float thresholdCutoff;
+float bloomSaturation;
+float originalSaturation;
+float bloomIntensity;
+float originalIntensity;
+
+TZ_TEXTURE2D_DECLARE(inputTexture0)
+{
+    MinFilter = Linear;
+    MagFilter = Linear;
+    WrapS = ClampToEdge;
+    WrapT = ClampToEdge;
+};
+
+TZ_TEXTURE2D_DECLARE(inputTexture1)
+{
+    MinFilter = Linear;
+    MagFilter = Linear;
+    WrapS = ClampToEdge;
+    WrapT = ClampToEdge;
+};
+
+TZ_TEXTURE2D_DECLARE(inputTexture2)
+{
+    MinFilter = Linear;
+    MagFilter = Linear;
+    WrapS = ClampToEdge;
+    WrapT = ClampToEdge;
+};
+
+TZ_TEXTURE2D_DECLARE(distortTexture)
+{
+    MinFilter = Linear;
+    MagFilter = Linear;
+    WrapS = Repeat;
+    WrapT = Repeat;
+};
+
+//
+// Constants
+//
+
+#define NUMWT 9
+float Gauss[NUMWT] = {0.93, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1};
+#define WT_NORMALIZE (1.0/(1.0+2.0*(0.93 + 0.8 + 0.7 + 0.6 + 0.5 + 0.4 + 0.3 + 0.2 + 0.1)))
+
+#define PI 3.141592653589793
+
+//
+// Vertex Programs
+//
+
+void vp_copy(in float4 InPosition : POSITION,
+             in float2 InUV : TEXCOORD0,
+             out float4 OutPosition : TZ_OUT_POSITION,
+             out float2 OutUV : TEXCOORD0)
+{
+    OutPosition = InPosition;
+    OutUV = InUV;
+}
+
+
+//
+// Pixel Programs
+//
+
+float4 fp_distort(float2 UV: TEXCOORD0) : TZ_OUT_COLOR0
+{
+    // Look up displacement amount for this pixel.
+    float3 uvt = float3(UV, 1.0);
+    float2 displacement = TZ_TEX2D(distortTexture, mul(transform, uvt)).xy;
+    displacement = mul(invTransform, displacement - 0.5);
+
+    // Offset main texture coordinates by displacement.
+    UV += displacement * strength;
+
+    // Change the RGB colour
+    return TZ_TEX2D(inputTexture0, UV);
+}
+
+float4 fp_colorMatrix(float2 UV: TEXCOORD0) : TZ_OUT_COLOR
+{
+    float4 color = TZ_TEX2D(inputTexture0, UV);
+    float4 mutc = color;
+    mutc.a = 1.0f;
+    mutc.xyz = mul(colorMatrix, mutc);
+    mutc.a = color.a;
+    return mutc;
+}
+
+float4 fp_bloom_threshold(float2 UV: TEXCOORD0) : TZ_OUT_COLOR0
+{
+    float4 col = TZ_TEX2D(inputTexture0, UV);
+    float luminance = dot(col.xyz, float3(0.2126, 0.7152, 0.0722));
+    float x = step(bloomThreshold, luminance);
+
+    float cut = bloomThreshold * pow(0.5 * (1 + sin(PI * (luminance / bloomThreshold - 0.5))), thresholdCutoff);
+    return (x + (1.0 - x) * cut) * col;
+}
+
+float4 fp_bloom_merge(float2 UV: TEXCOORD0) : TZ_OUT_COLOR0
+{
+    float4 orig = TZ_TEX2D(inputTexture0, UV);
+    float4 bloom = TZ_TEX2D(inputTexture1, UV);
+
+    float4 grey = dot(bloom.xyz, float3(0.2126, 0.7152, 0.0722));
+    bloom = lerp(grey, bloom, bloomSaturation) * bloomIntensity;
+
+    grey = dot(orig.rgb, float3(0.2126, 0.7152, 0.0722));
+    orig = lerp(grey, orig, originalSaturation) * (1 - saturate(bloom)) * originalIntensity;
+
+    return (bloom + orig);
+}
+
+float4 fp_gaussian_blur(float2 UV: TEXCOORD0) : TZ_OUT_COLOR0
+{
+    float2 _step = sampleRadius / NUMWT;
+    float4 color = TZ_TEX2D(inputTexture0, UV);
+    float2 dir = _step;
+    float scale;
+    for(int i=0; i<NUMWT; i++)
+    {
+        scale = Gauss[i];
+        color += TZ_TEX2D(inputTexture0, UV + dir) * scale;
+        color += TZ_TEX2D(inputTexture0, UV - dir) * scale;
+        dir += _step;
+    }
+    return (color * WT_NORMALIZE);
+}
+
+
+//
+// Techniques
+//
+
+technique distort
+{
+    pass
+    {
+		DepthTestEnable = false;
+        DepthMask       = false;
+        CullFaceEnable  = false;
+        BlendEnable     = false;
+        VertexProgram   = compile latest vp_copy();
+        FragmentProgram = compile latest fp_distort();
+    }
+}
+
+technique copyColorMatrix
+{
+    pass
+    {
+        DepthTestEnable = false;
+        DepthMask       = false;
+        CullFaceEnable  = false;
+        BlendEnable     = false;
+        VertexProgram   = compile latest vp_copy();
+        FragmentProgram = compile latest fp_colorMatrix();
+    }
+}
+
+technique bloomThreshold
+{
+    pass
+    {
+		DepthTestEnable = false;
+        DepthMask       = false;
+        CullFaceEnable  = false;
+        BlendEnable     = false;
+        VertexProgram   = compile latest vp_copy();
+        FragmentProgram = compile latest fp_bloom_threshold();
+    }
+}
+
+technique bloomMerge
+{
+    pass
+    {
+		DepthTestEnable = false;
+        DepthMask       = false;
+        CullFaceEnable  = false;
+        BlendEnable     = false;
+        VertexProgram   = compile latest vp_copy();
+        FragmentProgram = compile latest fp_bloom_merge();
+    }
+}
+
+technique gaussianBlur
+{
+    pass
+    {
+		DepthTestEnable = false;
+        DepthMask       = false;
+        CullFaceEnable  = false;
+        BlendEnable     = false;
+        VertexProgram   = compile latest vp_copy();
+        FragmentProgram = compile latest fp_gaussian_blur();
+    }
+}
