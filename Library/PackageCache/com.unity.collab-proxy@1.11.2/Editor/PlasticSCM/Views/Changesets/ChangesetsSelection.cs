@@ -20,3 +20,22 @@ namespace Unity.PlasticSCM.Editor.Views.Changesets
 
             listView.SelectRepObjectInfos(csetsToSelect);
 
+            if (listView.HasSelection())
+                return;
+
+            TableViewOperations.SelectDefaultRow(listView, defaultRow);
+
+            if (listView.HasSelection())
+                return;
+
+            TableViewOperations.SelectFirstRow(listView);
+        }
+
+        internal static List<RepObjectInfo> GetSelectedRepObjectInfos(
+            ChangesetsListView listView)
+        {
+            return listView.GetSelectedRepObjectInfos();
+        }
+
+        internal static int GetSelectedChangesetsCount(
+            ChangesetsListView listView)
