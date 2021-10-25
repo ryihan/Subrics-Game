@@ -44,3 +44,20 @@ namespace boost { namespace fusion
     {
         typedef result_of::insert<
             Sequence const, Position, T>
+        result_of;
+        typedef typename result_of::left_type left_type;
+        typedef typename result_of::right_type right_type;
+        typedef typename result_of::single_view single_view;
+        typedef typename result_of::left_insert_type left_insert_type;
+        typedef typename result_of::type result;
+
+        left_type left(fusion::begin(seq), convert_iterator<Position>::call(pos));
+        right_type right(convert_iterator<Position>::call(pos), fusion::end(seq));
+        single_view insert(x);
+        left_insert_type left_insert(left, insert);
+        return result(left_insert, right);
+    }
+}}
+
+#endif
+
