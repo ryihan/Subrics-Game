@@ -97,3 +97,23 @@ template<class T> struct sp_typeid_< T const volatile >: sp_typeid_< T >
 } // namespace boost
 
 #define BOOST_SP_TYPEID(T) (boost::detail::sp_typeid_<T>::ti_)
+
+#else
+
+#include <typeinfo>
+
+namespace boost
+{
+
+namespace detail
+{
+
+#if defined( BOOST_NO_STD_TYPEINFO )
+
+typedef ::type_info sp_typeinfo;
+
+#else
+
+typedef std::type_info sp_typeinfo;
+
+#endif
