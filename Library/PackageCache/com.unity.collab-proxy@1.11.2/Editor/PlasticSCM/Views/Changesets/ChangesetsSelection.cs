@@ -55,3 +55,14 @@ namespace Unity.PlasticSCM.Editor.Views.Changesets
         }
 
         internal static RepositorySpec GetSelectedRepository(
+            ChangesetsListView listView)
+        {
+            List<RepositorySpec> selectedRepositories = listView.GetSelectedRepositories();
+
+            if (selectedRepositories.Count == 0)
+                return null;
+
+            return selectedRepositories[0];
+        }
+    }
+}
