@@ -52,3 +52,25 @@ public:
     {
         return this != &rhs;
     }
+
+    bool before( sp_typeinfo const& rhs ) const
+    {
+        return std::less< sp_typeinfo const* >()( this, &rhs );
+    }
+
+    char const* name() const
+    {
+        return name_;
+    }
+};
+
+template<class T> struct sp_typeid_
+{
+    static sp_typeinfo ti_;
+
+    static char const * name()
+    {
+        return BOOST_CURRENT_FUNCTION;
+    }
+};
+
