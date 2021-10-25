@@ -1,0 +1,213 @@
+// Copyright (c) 2009-2013 Turbulenz Limited
+
+#include "platform.cgh"
+
+//
+// Vertex Programs
+//
+float4x4 worldViewProjection;
+float pointSize;
+
+
+float4 TransformPoint(float3 pt, float4x4 transform)
+{
+    return pt.xxxx * transform[0] +
+           pt.yyyy * transform[1] +
+           pt.zzzz * transform[2] +
+                     transform[3];
+}
+
+
+void
+vp_constantColor_3d(in float3 InPosition : POSITION,
+                    out float4 OutPosition  : TZ_OUT_POSITION)
+{
+    OutPosition = TransformPoint(InPosition, worldViewProjection);
+}
+
+void
+vp_vertexColor_3d(in float3 InPosition : POSITION,
+                  in float4 InColor0   : COLOR,
+                  out float4 OutPosition  : TZ_OUT_POSITION,
+                  out float4 OutColor0    : COLOR)
+{
+    OutPosition = TransformPoint(InPosition, worldViewProjection);
+    OutColor0   = InColor0;
+}
+
+void
+vp_textured_3d(in float3 InPosition : POSITION,
+               in float2 InTexCoord0 : TEXCOORD0,
+               out float4 OutPosition : TZ_OUT_POSITION,
+               out float2 OutTexCoord0 : TEXCOORD0)
+{
+    OutPosition  = TransformPoint(InPosition, worldViewProjection);
+    OutTexCoord0 = InTexCoord0;
+}
+
+void
+vp_vertexColorTextured_3d(in float3 InPosition  : POSITION,
+                          in float4 InColor0    : COLOR,
+                          in float2 InTexCoord0 : TEXCOORD0,
+                          out float4 OutPosition  : TZ_OUT_POSITION,
+                          out float4 OutColor0    : COLOR,
+                          out float2 OutTexCoord0 : TEXCOORD0)
+{
+    OutPosition  = TransformPoint(InPosition, worldViewProjection);
+    OutColor0    = InColor0;
+    OutTexCoord0 = InTexCoord0;
+}
+
+void
+vp_point_constantColor_3d(in float3 InPosition : POSITION,
+                          out float4 OutPosition  : TZ_OUT_POSITION,
+                          out float  OutPointSize : PSIZE)
+{
+    OutPosition = TransformPoint(InPosition, worldViewProjection);
+    OutPointSize = pointSize;
+}
+
+//
+// Pixel Programs
+//
+float4 constantColor;
+TZ_TEXTURE2D_DECLARE(diffuse)
+{
+    MinFilter = LinearMipMapNearest;
+    MagFilter = Linear;
+};
+
+float4
+fp_constantColor() : TZ_OUT_COLOR
+{
+    return constantColor;
+}
+
+float4
+fp_vertexColor(float4 InColor : COLOR) : TZ_OUT_COLOR
+{
+    return InColor;
+}
+
+float4
+fp_textured(float2 InTexCoord0 : TEXCOORD0) : TZ_OUT_COLOR
+{
+    return TZ_TEX2D(diffuse, InTexCoord0);
+    //return float4(InTexCoord0, 0.0, 1.0);
+}
+
+float4
+fp_vertexColorTextured(float4 InColor : COLOR,
+                       float2 InTexCoord0 : TEXCOORD0) : TZ_OUT_COLOR
+{
+    return InColor * TZ_TEX2D(diffuse, InTexCoord0);
+}
+
+float4
+fp_desatureTextureConstantColor(float2 InTexCoord0 : TEXCOORD0) : TZ_OUT_COLOR
+{
+    float4 tex      = TZ_TEX2D(diffuse, InTexCoord0);
+    float greyscale = dot(tex.rgb, float3(0.30, 0.59, 0.11));
+    tex.rgb         = lerp(greyscale, tex.rgb, 0.0);
+
+    return constantColor * tex;
+}
+
+//
+// Techniques
+//
+technique constantColor3D
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = true;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = false;
+
+        VertexProgram   = compile latest vp_constantColor_3d();
+        FragmentProgram = compile latest fp_constantColor();
+    }
+}
+
+technique vertexColor3D
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = true;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = false;
+
+        VertexProgram   = compile latest vp_vertexColor_3d();
+        FragmentProgram = compile latest fp_vertexColor();
+    }
+}
+
+technique textured3D
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = true;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = false;
+
+        VertexProgram   = compile latest vp_textured_3d();
+        FragmentProgram = compile latest fp_textured();
+    }
+}
+
+technique vertexColorTextured3D
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = true;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = false;
+
+        VertexProgram   = compile latest vp_vertexColorTextured_3d();
+        FragmentProgram = compile latest fp_vertexColorTextured();
+    }
+}
+
+technique desatureTextureConstantColor3D
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = true;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = false;
+
+        VertexProgram   = compile latest vp_textured_3d();
+        FragmentProgram = compile latest fp_desatureTextureConstantColor();
+    }
+}
+
+technique pointConstantColor3D
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = true;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = false;
+
+        VertexProgram   = compile latest vp_point_constantColor_3d();
+        FragmentProgram = compile latest fp_constantColor();
+    }
+}
