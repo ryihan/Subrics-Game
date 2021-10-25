@@ -39,3 +39,19 @@ namespace Unity.PlasticSCM.Editor.Views.Changesets
 
         internal static int GetSelectedChangesetsCount(
             ChangesetsListView listView)
+        {
+            return listView.GetSelection().Count;
+        }
+
+        internal static ChangesetExtendedInfo GetSelectedChangeset(
+            ChangesetsListView listView)
+        {
+            List<RepObjectInfo> selectedRepObjectsInfos = listView.GetSelectedRepObjectInfos();
+
+            if (selectedRepObjectsInfos.Count == 0)
+                return null;
+
+            return (ChangesetExtendedInfo)selectedRepObjectsInfos[0];
+        }
+
+        internal static RepositorySpec GetSelectedRepository(
