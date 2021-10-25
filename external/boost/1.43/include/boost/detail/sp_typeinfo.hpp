@@ -27,3 +27,28 @@ namespace boost
 
 namespace detail
 {
+
+class sp_typeinfo
+{
+private:
+
+    sp_typeinfo( sp_typeinfo const& );
+    sp_typeinfo& operator=( sp_typeinfo const& );
+
+    char const * name_;
+
+public:
+
+    explicit sp_typeinfo( char const * name ): name_( name )
+    {
+    }
+
+    bool operator==( sp_typeinfo const& rhs ) const
+    {
+        return this == &rhs;
+    }
+
+    bool operator!=( sp_typeinfo const& rhs ) const
+    {
+        return this != &rhs;
+    }
