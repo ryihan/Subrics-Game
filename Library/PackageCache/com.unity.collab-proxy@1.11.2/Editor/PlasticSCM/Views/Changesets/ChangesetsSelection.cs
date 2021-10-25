@@ -10,3 +10,13 @@ namespace Unity.PlasticSCM.Editor.Views.Changesets
         internal static void SelectChangesets(
             ChangesetsListView listView,
             List<RepObjectInfo> csetsToSelect,
+            int defaultRow)
+        {
+            if (csetsToSelect == null || csetsToSelect.Count == 0)
+            {
+                TableViewOperations.SelectFirstRow(listView);
+                return;
+            }
+
+            listView.SelectRepObjectInfos(csetsToSelect);
+
