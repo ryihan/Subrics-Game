@@ -1,3 +1,7 @@
+
+#ifndef BOOST_MPL_VECTOR_VECTOR0_HPP_INCLUDED
+#define BOOST_MPL_VECTOR_VECTOR0_HPP_INCLUDED
+
 #include <boost/mpl/vector/aux_/at.hpp>
 #include <boost/mpl/vector/aux_/front.hpp>
 #include <boost/mpl/vector/aux_/push_front.hpp>
