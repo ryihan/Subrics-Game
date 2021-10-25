@@ -117,3 +117,13 @@ typedef ::type_info sp_typeinfo;
 typedef std::type_info sp_typeinfo;
 
 #endif
+
+} // namespace detail
+
+} // namespace boost
+
+#define BOOST_SP_TYPEID(T) typeid(T)
+
+#endif
+
+#endif  // #ifndef BOOST_DETAIL_SP_TYPEINFO_HPP_INCLUDED
