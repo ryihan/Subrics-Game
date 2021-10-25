@@ -1,0 +1,588 @@
+// Copyright (c) 2012-2013 Turbulenz Limited
+
+#include "platform.cgh"
+#include "common.cgh"
+#include "uvtransform.cgh"
+
+//
+// Uniform variables
+//
+float4x4 viewProjection;
+float4x4 projection;
+float4x3 world;
+float4x3 worldView;
+float3x3 worldInverseTranspose;
+float3x3 worldViewInverseTranspose;
+
+float4 materialColor = {1.0, 1.0, 1.0, 1.0};
+
+float3 ambientColor;
+
+float4x4 lightViewInverseTransposeFalloff;
+float3 lightOrigin;
+float3 lightColor;
+
+float alphaRef = 0.5;
+float lightingScale = 2.0;
+
+float3 eyePosition;
+
+static const float SpecularExponent = 8.0;
+
+float4 skinBones[75 * 3];
+
+TZ_TEXTURE2D_DECLARE(diffuse)
+{
+    MinFilter = LinearMipMapNearest;
+    MagFilter = Linear;
+    WrapS = Repeat;
+    WrapT = Repeat;
+    MaxAnisotropy = 8;
+};
+
+TZ_TEXTURE2D_DECLARE(normal_map)
+{
+    MinFilter = LinearMipMapNearest;
+    MagFilter = Linear;
+    WrapS = Repeat;
+    WrapT = Repeat;
+    MaxAnisotropy = 8;
+};
+
+TZ_TEXTURE2D_DECLARE(specular_map)
+{
+    MinFilter = LinearMipMapNearest;
+    MagFilter = Linear;
+    WrapS = Repeat;
+    WrapT = Repeat;
+    MaxAnisotropy = 8;
+};
+
+TZ_TEXTURE2D_DECLARE(alpha_map)
+{
+    MinFilter = LinearMipMapNearest;
+    MagFilter = Linear;
+    WrapS = Repeat;
+    WrapT = Repeat;
+    MaxAnisotropy = 4;
+};
+
+TZ_TEXTURE2D_DECLARE(glow_map)
+{
+    MinFilter = LinearMipMapNearest;
+    MagFilter = Linear;
+    WrapS = Repeat;
+    WrapT = Repeat;
+};
+
+TZ_TEXTURE2D_DECLARE(light_map)
+{
+    MinFilter = LinearMipMapNearest;
+    MagFilter = Linear;
+    WrapS = ClampToEdge;
+    WrapT = ClampToEdge;
+};
+
+TZ_TEXTURECUBE_DECLARE(env_map)
+{
+    MinFilter = LinearMipMapNearest;
+    MagFilter = Linear;
+    WrapS = ClampToEdge;
+    WrapT = ClampToEdge;
+    WrapR = ClampToEdge;
+};
+
+TZ_TEXTURE2D_DECLARE(lightprojection)
+{
+    MinFilter = Nearest;
+    MagFilter = Linear;
+    WrapS = ClampToEdge;
+    WrapT = ClampToEdge;
+};
+
+TZ_TEXTURE2D_DECLARE(lightfalloff)
+{
+    MinFilter = Nearest;
+    MagFilter = Linear;
+    WrapS = ClampToEdge;
+    WrapT = ClampToEdge;
+};
+
+//
+// Utils
+//
+float3x4 BuildSkinTransform(float4 indices, float4 weights)
+{
+    float3x4 skinWeightTransform;
+    float4 skinIndices = (indices * 3.0);
+    int bone0 = int(skinIndices.x);
+    int bone1 = int(skinIndices.y);
+    int bone2 = int(skinIndices.z);
+    int bone3 = int(skinIndices.w);
+    skinWeightTransform[0] = weights.x * skinBones[bone0 + 0];
+    skinWeightTransform[1] = weights.x * skinBones[bone0 + 1];
+    skinWeightTransform[2] = weights.x * skinBones[bone0 + 2];
+
+    skinWeightTransform[0] += weights.y * skinBones[bone1 + 0];
+    skinWeightTransform[1] += weights.y * skinBones[bone1 + 1];
+    skinWeightTransform[2] += weights.y * skinBones[bone1 + 2];
+
+    skinWeightTransform[0] += weights.z * skinBones[bone2 + 0];
+    skinWeightTransform[1] += weights.z * skinBones[bone2 + 1];
+    skinWeightTransform[2] += weights.z * skinBones[bone2 + 2];
+
+    skinWeightTransform[0] += weights.w * skinBones[bone3 + 0];
+    skinWeightTransform[1] += weights.w * skinBones[bone3 + 1];
+    skinWeightTransform[2] += weights.w * skinBones[bone3 + 2];
+
+    return skinWeightTransform;
+}
+
+float4 PointToDevice(float3 pt, float4x4 transform)
+{
+    return pt.xxxx * transform[0] +
+           pt.yyyy * transform[1] +
+           pt.zzzz * transform[2] +
+                     transform[3];
+}
+
+float4 PointToLight(float4 p, float4x4 transform)
+{
+    return float4(dot(p, transform[0]),
+                  dot(p, transform[1]),
+                  dot(p, transform[2]),
+                  dot(p, transform[3]));
+}
+
+float3 TransformPoint(float3 pt, float4x3 transform)
+{
+    return pt.xxx * transform[0] +
+           pt.yyy * transform[1] +
+           pt.zzz * transform[2] +
+                    transform[3];
+}
+
+float3 TransformNormal(float3 n, float3x3 transform)
+{
+    return n.xxx * transform[0] +
+           n.yyy * transform[1] +
+           n.zzz * transform[2];
+}
+
+void light_contribution(in float3 INViewNormal   : TEXCOORD1,
+                        in float3 INViewTangent  : TEXCOORD2,
+                        in float3 INViewBinormal : TEXCOORD3,
+                        in float3 INViewPosition : TEXCOORD4,
+                        in float3 Nn,
+                        out float3 diffContrib)
+{
+    float3 position = INViewPosition;
+    float3 Ln = normalize(lightOrigin - position);
+    Ln = float3(dot(Ln, INViewTangent), dot(Ln, INViewBinormal), dot(Ln, INViewNormal));
+    Ln = normalize(Ln);
+    float4 position4 = float4(position, 1.0);
+    float4 proj = PointToLight(position4, lightViewInverseTransposeFalloff);
+    float3 attenuation = tex2DprojFix(lightprojection, proj.xyz).xyz *
+                         TZ_TEX2D(lightfalloff, float2(proj.w, 0.5)).y;
+    diffContrib = (dot(Ln, Nn) * lightColor * attenuation);
+    // Discard fragment if it does not contribute much actual light
+    if (dot(diffContrib, float3(0.3, 0.59, 0.11)) < 0.004)
+    {
+        discard;
+    }
+}
+
+void light_contribution_specular(in float3 INViewNormal   : TEXCOORD1,
+                                 in float3 INViewTangent  : TEXCOORD2,
+                                 in float3 INViewBinormal : TEXCOORD3,
+                                 in float3 INViewPosition : TEXCOORD4,
+                                 in float3 Nn,
+                                 out float3 diffContrib,
+                                 out float3 specContrib)
+{
+    float3 position = INViewPosition;
+    float3 Ln = normalize(lightOrigin - position);
+    float3 Vn = normalize(-position);
+    float3 Hn = normalize(Vn + Ln);
+    Ln = float3(dot(Ln, INViewTangent), dot(Ln, INViewBinormal), dot(Ln, INViewNormal));
+    Hn = float3(dot(Hn, INViewTangent), dot(Hn, INViewBinormal), dot(Hn, INViewNormal));
+    Ln = normalize(Ln);
+    Hn = normalize(Hn);
+    float4 position4 = float4(position, 1.0);
+    float4 proj = PointToLight(position4, lightViewInverseTransposeFalloff);
+    float3 attenuation = tex2DprojFix(lightprojection, proj.xyz).xyz *
+                         TZ_TEX2D(lightfalloff, float2(proj.w, 0.5)).y;
+    float3 lightcolor = (lightColor * attenuation);
+    diffContrib = (dot(Ln, Nn) * lightcolor);
+    // Discard fragment if it does not contribute much actual light
+    if (dot(diffContrib, float3(0.3, 0.59, 0.11)) < 0.004)
+    {
+        discard;
+    }
+    float s = pow(max(dot(Hn, Nn), 0.0), SpecularExponent);
+    specContrib = (s * lightcolor);
+}
+
+float3 SampleNormalMap(float2 uv)
+{
+    return normalize(2.0 * TZ_TEX2D(normal_map, uv).xyz - 1.0);
+}
+
+float3 SampleNormalMapRXGB(float2 uv)
+{
+    float3 normal;
+    //normal = (2.0 * TZ_TEX2D(normal_map, uv).xyz - 1.0);
+    normal = normalize(2.0 * TZ_TEX2D(normal_map, uv).agb - 1.0);
+    //normal.xy = (2.0 * TZ_TEX2D(normal_map, uv).ag - 1.0);
+    //normal.z = sqrt(1.0 - (normal.x * normal.x) - (normal.y * normal.y));
+    return normal;
+}
+
+//
+// Vertex programs
+//
+void vp_ambient(in float3 INPosition : POSITION,
+                in float2 INUV       : TEXCOORD0,
+                out float4 OUTPosition : TZ_OUT_POSITION,
+                out float2 OUTUV       : TEXCOORD0)
+{
+    float3 position = TransformPoint(INPosition, worldView);
+    OUTPosition = PointToDevice(position, projection);
+    OUTUV = TransformUV(INUV);
+}
+
+void vp_ambient_skinned(in float3 INPosition : POSITION,
+                        in float2 INUV		 : TEXCOORD0,
+                        in float4 INIndices  : BLENDINDICES,
+                        in float4 INWeights  : BLENDWEIGHT,
+                        out float4 OUTPosition : TZ_OUT_POSITION,
+                        out float2 OUTUV       : TEXCOORD0)
+{
+    float3x4 skinTransform = BuildSkinTransform(INIndices, INWeights);
+
+    float4 skinTempPosition = float4(INPosition, 1.0);
+    float3 Position;
+    Position.x = dot(skinTempPosition, skinTransform[0]);
+    Position.y = dot(skinTempPosition, skinTransform[1]);
+    Position.z = dot(skinTempPosition, skinTransform[2]);
+
+    float3 position = TransformPoint(Position, worldView);
+    OUTPosition = PointToDevice(position, projection);
+    OUTUV = TransformUV(INUV);
+}
+
+float4 vp_ambient_flat(float3 INPosition : POSITION) : TZ_OUT_POSITION
+{
+    float3 position = TransformPoint(INPosition, worldView);
+    return PointToDevice(position, projection);
+}
+
+float4 vp_ambient_flat_skinned(in float3 INPosition : POSITION,
+                               in float4 INIndices  : BLENDINDICES,
+                               in float4 INWeights  : BLENDWEIGHT) : TZ_OUT_POSITION
+{
+    float3x4 skinTransform = BuildSkinTransform(INIndices, INWeights);
+
+    float4 skinTempPosition = float4(INPosition, 1.0);
+    float3 Position;
+    Position.x = dot(skinTempPosition, skinTransform[0]);
+    Position.y = dot(skinTempPosition, skinTransform[1]);
+    Position.z = dot(skinTempPosition, skinTransform[2]);
+
+    float3 position = TransformPoint(Position, worldView);
+    return PointToDevice(position, projection);
+}
+
+void vp_lightmap(in float3 INPosition : POSITION,
+                 in float2 INUV0      : TEXCOORD0,
+                 in float2 INUV1      : TEXCOORD1,
+                 out float4 OUTPosition : TZ_OUT_POSITION,
+                 out float4 OUTUV       : TEXCOORD0)
+{
+    float3 position = TransformPoint(INPosition, worldView);
+    OUTPosition = PointToDevice(position, projection);
+    OUTUV.xy = TransformUV(INUV0);
+    OUTUV.zw = TransformUV(INUV1);
+}
+
+void vp_nolight(in float3 INPosition : POSITION,
+                in float2 INUV       : TEXCOORD0,
+                out float4 OUTPosition : TZ_OUT_POSITION,
+                out float4 OUTColor    : COLOR,
+                out float2 OUTUV       : TEXCOORD0)
+{
+    float3 position = TransformPoint(INPosition, world);
+    OUTPosition = PointToDevice(position, viewProjection);
+    OUTColor = materialColor;
+    OUTUV = TransformUV(INUV);
+}
+
+void vp_nolight_skinned(in float3 INPosition : POSITION,
+                        in float2 INUV	   : TEXCOORD0,
+                        in float4 INIndices  : BLENDINDICES,
+                        in float4 INWeights  : BLENDWEIGHT,
+                        out float4 OUTPosition : TZ_OUT_POSITION,
+                        out float4 OUTColor    : COLOR,
+                        out float2 OUTUV       : TEXCOORD0)
+{
+    float3x4 skinTransform = BuildSkinTransform(INIndices, INWeights);
+
+    float4 skinTempPosition = float4(INPosition, 1.0);
+    float3 Position;
+    Position.x = dot(skinTempPosition, skinTransform[0]);
+    Position.y = dot(skinTempPosition, skinTransform[1]);
+    Position.z = dot(skinTempPosition, skinTransform[2]);
+
+    float3 position = TransformPoint(Position, world);
+    OUTPosition = PointToDevice(position, viewProjection);
+    OUTColor = materialColor;
+    OUTUV = TransformUV(INUV);
+}
+
+void vp_nolight_vertexcolor(in float3 INPosition : POSITION,
+                            in float2 INUV       : TEXCOORD0,
+                            in float4 INColor    : COLOR,
+                            out float4 OUTPosition : TZ_OUT_POSITION,
+                            out float4 OUTColor    : COLOR,
+                            out float2 OUTUV       : TEXCOORD0)
+{
+    float3 position = TransformPoint(INPosition, world);
+    OUTPosition = PointToDevice(position, viewProjection);
+    OUTColor = float4(INColor.xyz * materialColor.xyz, INColor.w);
+    OUTUV = TransformUV(INUV);
+}
+
+void vp_skybox(in float3 INPosition : POSITION,
+               out float4 OUTPosition     : TZ_OUT_POSITION,
+               out float3 OUTeyeDirection : TEXCOORD0)
+{
+    float3 position = TransformPoint(INPosition, world);
+    OUTPosition = PointToDevice(position, viewProjection);
+    OUTeyeDirection = (position - eyePosition);
+}
+
+void vp_glass_env(in float3 INPosition : POSITION,
+                  in float3 INNormal   : NORMAL,
+                  in float2 INUV       : TEXCOORD0,
+                  out float4 OUTPosition     : TZ_OUT_POSITION,
+                  out float4 OUTColor        : COLOR,
+                  out float2 OUTUV           : TEXCOORD0,
+                  out float3 OUTNormal       : TEXCOORD1,
+                  out float3 OUTeyeDirection : TEXCOORD2)
+{
+    float3 position = TransformPoint(INPosition, world);
+    OUTPosition = PointToDevice(position, viewProjection);
+    OUTColor = materialColor;
+    OUTUV = TransformUV(INUV);
+    OUTNormal = TransformNormal(INNormal, worldInverseTranspose);
+    OUTeyeDirection = (position - eyePosition);
+}
+
+void vp_env(in float3 INPosition : POSITION,
+            in float3 INNormal   : NORMAL,
+            out float4 OUTPosition     : TZ_OUT_POSITION,
+            out float4 OUTColor        : COLOR,
+            out float3 OUTNormal       : TEXCOORD0,
+            out float3 OUTeyeDirection : TEXCOORD1)
+{
+    float3 position = TransformPoint(INPosition, world);
+    OUTPosition = PointToDevice(position, viewProjection);
+    OUTColor = materialColor;
+    OUTNormal = TransformNormal(INNormal, worldInverseTranspose);
+    OUTeyeDirection = (position - eyePosition);
+}
+
+void vp_env_skinned(in float3 INPosition : POSITION,
+                    in float3 INNormal   : NORMAL,
+                    in float4 INIndices  : BLENDINDICES,
+                    in float4 INWeights  : BLENDWEIGHT,
+                    out float4 OUTPosition     : TZ_OUT_POSITION,
+                    out float4 OUTColor        : COLOR,
+                    out float3 OUTNormal       : TEXCOORD0,
+                    out float3 OUTeyeDirection : TEXCOORD1)
+{
+    float3x4 skinTransform = BuildSkinTransform(INIndices, INWeights);
+
+    float4 skinTempPosition = float4(INPosition, 1.0);
+    float3 skinTempNormal = INNormal.xyz;
+    float3 Position, Normal;
+    Position.x = dot(skinTempPosition, skinTransform[0]);
+    Position.y = dot(skinTempPosition, skinTransform[1]);
+    Position.z = dot(skinTempPosition, skinTransform[2]);
+    Normal.x = dot(skinTempNormal, skinTransform[0].xyz);
+    Normal.y = dot(skinTempNormal, skinTransform[1].xyz);
+    Normal.z = dot(skinTempNormal, skinTransform[2].xyz);
+
+    float3 position = TransformPoint(Position, world);
+    OUTPosition = PointToDevice(position, viewProjection);
+    OUTColor = materialColor;
+    OUTNormal = TransformNormal(Normal, worldInverseTranspose);
+    OUTeyeDirection = (position - eyePosition);
+}
+
+void vp_flat(in float3 INPosition : POSITION,
+             in float3 INNormal   : NORMAL,
+             out float4 OUTPosition : TZ_OUT_POSITION,
+             out float4 OUTColor    : COLOR,
+             out float3 OUTViewNormal   : TEXCOORD1,
+             out float3 OUTViewPosition : TEXCOORD2)
+{
+    float3 position = TransformPoint(INPosition, worldView);
+    OUTPosition = PointToDevice(position, projection);
+    OUTColor = materialColor;
+    OUTViewNormal = TransformNormal(INNormal, worldViewInverseTranspose);
+    OUTViewPosition = position;
+}
+
+void vp_flat_skinned(in float3 INPosition : POSITION,
+                     in float3 INNormal	: NORMAL,
+                     in float4 INIndices  : BLENDINDICES,
+                     in float4 INWeights  : BLENDWEIGHT,
+                     out float4 OUTPosition : TZ_OUT_POSITION,
+                     out float4 OUTColor    : COLOR,
+                     out float3 OUTViewNormal   : TEXCOORD1,
+                     out float3 OUTViewPosition : TEXCOORD2)
+{
+    float3x4 skinTransform = BuildSkinTransform(INIndices, INWeights);
+
+    float4 skinTempPosition = float4(INPosition, 1.0);
+    float3 skinTempNormal = INNormal.xyz;
+    float3 Position, Normal;
+    Position.x = dot(skinTempPosition, skinTransform[0]);
+    Position.y = dot(skinTempPosition, skinTransform[1]);
+    Position.z = dot(skinTempPosition, skinTransform[2]);
+    Normal.x = dot(skinTempNormal, skinTransform[0].xyz);
+    Normal.y = dot(skinTempNormal, skinTransform[1].xyz);
+    Normal.z = dot(skinTempNormal, skinTransform[2].xyz);
+
+    Normal.xyz = normalize(Normal.xyz);
+
+    float3 position = TransformPoint(Position, worldView);
+    OUTPosition = PointToDevice(position, projection);
+    OUTColor = materialColor;
+    OUTViewNormal = TransformNormal(Normal, worldViewInverseTranspose);
+    OUTViewPosition = position;
+}
+
+void vp_blinn(in float3 INPosition : POSITION,
+              in float3 INNormal   : NORMAL,
+              in float2 INUV       : TEXCOORD0,
+              out float4 OUTPosition : TZ_OUT_POSITION,
+              out float4 OUTColor    : COLOR,
+              out float2 OUTUV       : TEXCOORD0,
+              out float3 OUTViewNormal   : TEXCOORD1,
+              out float3 OUTViewPosition : TEXCOORD2)
+{
+    float3 position = TransformPoint(INPosition, worldView);
+    OUTPosition = PointToDevice(position, projection);
+    OUTColor = materialColor;
+    OUTUV = TransformUV(INUV);
+    OUTViewNormal = TransformNormal(INNormal, worldViewInverseTranspose);
+    OUTViewPosition = position;
+}
+
+void vp_blinn_skinned(in float3 INPosition : POSITION,
+                      in float3 INNormal   : NORMAL,
+                      in float2 INUV       : TEXCOORD0,
+                      in float4 INIndices  : BLENDINDICES,
+                      in float4 INWeights  : BLENDWEIGHT,
+                      out float4 OUTPosition : TZ_OUT_POSITION,
+                      out float4 OUTColor    : COLOR,
+                      out float2 OUTUV       : TEXCOORD0,
+                      out float3 OUTViewNormal   : TEXCOORD1,
+                      out float3 OUTViewPosition : TEXCOORD2)
+{
+    float3x4 skinTransform = BuildSkinTransform(INIndices, INWeights);
+
+    float4 skinTempPosition = float4(INPosition, 1.0);
+    float3 skinTempNormal = INNormal.xyz;
+    float3 Position, Normal;
+    Position.x = dot(skinTempPosition, skinTransform[0]);
+    Position.y = dot(skinTempPosition, skinTransform[1]);
+    Position.z = dot(skinTempPosition, skinTransform[2]);
+    Normal.x = dot(skinTempNormal, skinTransform[0].xyz);
+    Normal.y = dot(skinTempNormal, skinTransform[1].xyz);
+    Normal.z = dot(skinTempNormal, skinTransform[2].xyz);
+
+    Normal.xyz = normalize(Normal.xyz);
+
+    float3 position = TransformPoint(Position, worldView);
+    OUTPosition = PointToDevice(position, projection);
+    OUTColor = materialColor;
+    OUTUV = TransformUV(INUV);
+    OUTViewNormal = TransformNormal(Normal, worldViewInverseTranspose);
+    OUTViewPosition = position;
+}
+
+void vp_normalmap(in float3 INPosition : POSITION,
+                  in float3 INNormal   : NORMAL,
+                  in float2 INUV       : TEXCOORD0,
+                  in float3 INTangent  : TANGENT,
+                  in float3 INBinormal : BINORMAL,
+                  out float4 OUTPosition : TZ_OUT_POSITION,
+                  out float4 OUTColor    : COLOR,
+                  out float2 OUTUV       : TEXCOORD0,
+                  out float3 OUTViewNormal   : TEXCOORD1,
+                  out float3 OUTViewTangent  : TEXCOORD2,
+                  out float3 OUTViewBinormal : TEXCOORD3,
+                  out float3 OUTViewPosition : TEXCOORD4)
+{
+    float3 position = TransformPoint(INPosition, worldView);
+    OUTPosition = PointToDevice(position, projection);
+    OUTColor = materialColor;
+    OUTUV = TransformUV(INUV);
+    OUTViewNormal   = TransformNormal(INNormal, worldViewInverseTranspose);
+    OUTViewTangent  = TransformNormal(INTangent, worldViewInverseTranspose);
+    OUTViewBinormal = TransformNormal(INBinormal, worldViewInverseTranspose);
+    OUTViewPosition = position;
+}
+
+void vp_normalmap_skinned(in float3 INPosition : POSITION,
+                          in float3 INNormal   : NORMAL,
+                          in float2 INUV       : TEXCOORD0,
+                          in float3 INTangent  : TANGENT,
+                          in float3 INBinormal : BINORMAL,
+                          in float4 INIndices  : BLENDINDICES,
+                          in float4 INWeights  : BLENDWEIGHT,
+                          out float4 OUTPosition : TZ_OUT_POSITION,
+                          out float4 OUTColor    : COLOR,
+                          out float2 OUTUV       : TEXCOORD0,
+                          out float3 OUTViewNormal   : TEXCOORD1,
+                          out float3 OUTViewTangent  : TEXCOORD2,
+                          out float3 OUTViewBinormal : TEXCOORD3,
+                          out float3 OUTViewPosition : TEXCOORD4)
+{
+    float3x4 skinTransform = BuildSkinTransform(INIndices, INWeights);
+
+    float4 skinTempPosition = float4(INPosition, 1.0);
+    float3 skinTempNormal = INNormal.xyz;
+    float3 skinTempTangent = INTangent.xyz;
+    float3 skinTempBinormal = INBinormal.xyz;
+
+    float3 Position, Normal, Tangent, Binormal;
+    Position.x = dot(skinTempPosition, skinTransform[0]);
+    Position.y = dot(skinTempPosition, skinTransform[1]);
+    Position.z = dot(skinTempPosition, skinTransform[2]);
+    Normal.x = dot(skinTempNormal, skinTransform[0].xyz);
+    Normal.y = dot(skinTempNormal, skinTransform[1].xyz);
+    Normal.z = dot(skinTempNormal, skinTransform[2].xyz);
+    Tangent.x = dot(skinTempTangent, skinTransform[0].xyz);
+    Tangent.y = dot(skinTempTangent, skinTransform[1].xyz);
+    Tangent.z = dot(skinTempTangent, skinTransform[2].xyz);
+    Binormal.x = dot(skinTempBinormal, skinTransform[0].xyz);
+    Binormal.y = dot(skinTempBinormal, skinTransform[1].xyz);
+    Binormal.z = dot(skinTempBinormal, skinTransform[2].xyz);
+
+    Normal.xyz = normalize(Normal.xyz);
+    Tangent.xyz = normalize(Tangent.xyz);
+    Binormal.xyz = normalize(Binormal.xyz);
+
+    float3 position = TransformPoint(Position, worldView);
+    OUTPosition = PointToDevice(position, projection);
+    OUTColor = materialColor;
+    OUTUV = TransformUV(INUV);
+    OUTViewNormal   = TransformNormal(Normal, worldViewInverseTranspose);
+    OUTViewTangent  = TransformNormal(Tangent, worldViewInverseTranspose);
+    OUTViewBinormal = TransformNormal(Binormal, worldViewInverseTranspose);
+    OUTViewPosition = position;
+}
