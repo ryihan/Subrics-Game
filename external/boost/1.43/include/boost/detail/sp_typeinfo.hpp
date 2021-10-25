@@ -74,3 +74,26 @@ template<class T> struct sp_typeid_
     }
 };
 
+template<class T> sp_typeinfo sp_typeid_< T >::ti_( sp_typeid_< T >::name() );
+
+template<class T> struct sp_typeid_< T & >: sp_typeid_< T >
+{
+};
+
+template<class T> struct sp_typeid_< T const >: sp_typeid_< T >
+{
+};
+
+template<class T> struct sp_typeid_< T volatile >: sp_typeid_< T >
+{
+};
+
+template<class T> struct sp_typeid_< T const volatile >: sp_typeid_< T >
+{
+};
+
+} // namespace detail
+
+} // namespace boost
+
+#define BOOST_SP_TYPEID(T) (boost::detail::sp_typeid_<T>::ti_)
