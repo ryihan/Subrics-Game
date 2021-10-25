@@ -15,3 +15,32 @@
 #include <boost/fusion/view/iterator_range/iterator_range.hpp>
 #include <boost/fusion/sequence/intrinsic/begin.hpp>
 #include <boost/fusion/sequence/intrinsic/end.hpp>
+#include <boost/fusion/adapted/mpl/mpl_iterator.hpp>
+
+namespace boost { namespace fusion
+{
+    namespace result_of
+    {
+        template <typename Sequence, typename Position, typename T>
+        struct insert
+        {
+            typedef typename detail::as_fusion_element<T>::type element_type;
+            typedef typename convert_iterator<Position>::type pos_type;
+            typedef typename result_of::begin<Sequence>::type first_type;
+            typedef typename result_of::end<Sequence>::type last_type;
+
+            typedef iterator_range<first_type, pos_type> left_type;
+            typedef iterator_range<pos_type, last_type> right_type;
+            typedef fusion::single_view<element_type> single_view;
+            typedef joint_view<left_type, single_view const> left_insert_type;
+            typedef joint_view<left_insert_type, right_type> type;
+        };
+    }
+
+    template <typename Sequence, typename Position, typename T>
+    inline typename result_of::insert<
+        Sequence const, Position, T>::type
+    insert(Sequence const& seq, Position const& pos, T const& x)
+    {
+        typedef result_of::insert<
+            Sequence const, Position, T>
