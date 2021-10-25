@@ -1,0 +1,1018 @@
+// Copyright (c) 2010-2012 Turbulenz Limited
+
+#include "platform.cgh"
+
+#include "forwardrenderingcommon.cgh"
+
+//
+// Uniform variables
+//
+
+float4x4 shadowProjection;
+float4 shadowDepth;
+float shadowSize;
+
+TZ_TEXTURE2D_DECLARE(shadowMapTexture)
+{
+    MinFilter = Nearest;
+    MagFilter = Nearest;
+    WrapS = ClampToEdge;
+    WrapT = ClampToEdge;
+};
+
+float4 WorldPointToDevice(float3 wpt, float4x4 vp)
+{
+    return ((wpt.xxxx * vp[0]) + (wpt.yyyy * vp[1]) + (wpt.zzzz * vp[2]) + vp[3]);
+}
+
+float DecodeFloatRGB16(float4 rgba)
+{
+    return dot(rgba.xyz, float3(63488.0 / 65535.0, 2016.0 / 65535.0, 31.0 / 65535.0));
+}
+
+float ApplyShadowAttenuation(float3 position)
+{
+    float3 shadowPosition = WorldPointToDevice(position, shadowProjection).xyw;
+    float2 shadowSpace = (shadowPosition.xy / shadowPosition.z);
+    float depth = saturate(dot(shadowDepth, float4(position, 1.0)) - 0.007);
+    float2 shadowuv = (shadowSpace * 0.5 + 0.5);
+
+    // emulate bilinear filtering
+    float2 unnormalized = (shadowuv * shadowSize);
+    float2 fractional = frac(unnormalized);
+    unnormalized = floor(unnormalized);
+    float shadowSizeReciprocal = (1.0 / shadowSize);
+    float4 exponent;
+    exponent.x = DecodeFloatRGB16(TZ_TEX2D(shadowMapTexture, (unnormalized + float2(-0.5,  0.5)) * shadowSizeReciprocal));
+    exponent.y = DecodeFloatRGB16(TZ_TEX2D(shadowMapTexture, (unnormalized + float2( 0.5,  0.5)) * shadowSizeReciprocal));
+    exponent.z = DecodeFloatRGB16(TZ_TEX2D(shadowMapTexture, (unnormalized + float2( 0.5, -0.5)) * shadowSizeReciprocal));
+    exponent.w = DecodeFloatRGB16(TZ_TEX2D(shadowMapTexture, (unnormalized + float2(-0.5, -0.5)) * shadowSizeReciprocal));
+
+    const float over_darkening_factor = 48.0;
+    /*
+    float4 occluder4 = exponent;
+    float occluder = (occluder4.w + (occluder4.x - occluder4.w) * fractional.y);
+    occluder = occluder + ((occluder4.z + (occluder4.y - occluder4.z) * fractional.y) - occluder)*fractional.x;
+    float shadowAttenuation = min(exp(over_darkening_factor * (occluder - depth)), 1.0);
+    */
+
+    // take the minimum with some large value in order to avoid an inf value
+    float4 occlusion4 = min(exp(over_darkening_factor * (exponent - depth)), 1e4);
+
+    float occlusion = (occlusion4.w + (occlusion4.x - occlusion4.w) * fractional.y);
+    float shadowAttenuation = min(occlusion + ((occlusion4.z + (occlusion4.y - occlusion4.z) * fractional.y) - occlusion)*fractional.x, 1.0);
+
+    return shadowAttenuation;
+}
+
+float4 fp_flat_shadows(in float4 INColor        : COLOR,
+                       in float3 INViewNormal   : TEXCOORD1,
+                       in float3 INViewPosition : TEXCOORD2) : TZ_OUT_COLOR
+{
+    float3 Nn = normalize(INViewNormal);
+    float3 position = INViewPosition;
+
+    float4 position4 = float4(position, 1.0);
+    float4 proj = PointToLight(position4, lightViewInverseTransposeFalloff);
+
+    float3 Ln = normalize(lightOrigin - position);
+    float3 diffContrib = dot(Ln, Nn) * lightColor;
+    float3 attenuation = tex2DprojFix(lightprojection, proj.xyz).xyz *
+                         TZ_TEX2D(lightfalloff, float2(proj.w, 0.5)).y;
+    diffContrib *= attenuation;
+    if (dot(diffContrib, float3(0.3, 0.59, 0.11)) < 0.004)
+    {
+        discard;
+    }
+
+    diffContrib *= ApplyShadowAttenuation(INViewPosition);
+    return float4(INColor.xyz * diffContrib, INColor.w);
+}
+
+float4 fp_blinn_shadows(in float4 INColor    : COLOR,
+                        in float2 INUV       : TEXCOORD0,
+                        in float3 INViewNormal   : TEXCOORD1,
+                        in float3 INViewPosition : TEXCOORD2) : TZ_OUT_COLOR
+{
+    float3 Nn = normalize(INViewNormal);
+    float3 position = INViewPosition;
+
+    float4 position4 = float4(position, 1.0);
+    float4 proj = PointToLight(position4, lightViewInverseTransposeFalloff);
+
+    float3 Ln = normalize(lightOrigin - position);
+    float3 diffContrib = dot(Ln, Nn) * lightColor;
+    float4 diffuseColor = TZ_TEX2D(diffuse, INUV);
+    float3 attenuation = tex2DprojFix(lightprojection, proj.xyz).xyz *
+                         TZ_TEX2D(lightfalloff, float2(proj.w, 0.5)).y;
+    diffContrib *= attenuation;
+    if (dot(diffContrib, float3(0.3, 0.59, 0.11)) < 0.004)
+    {
+        discard;
+    }
+
+    diffContrib *= ApplyShadowAttenuation(INViewPosition);
+    float3 result = (diffuseColor.xyz * diffContrib);
+    return INColor * float4(result, diffuseColor.w);
+}
+
+float4 fp_normalmap_shadows(in float4 INColor   : COLOR,
+                            in float2 INUV      : TEXCOORD0,
+                            in float3 INViewNormal   : TEXCOORD1,
+                            in float3 INViewTangent  : TEXCOORD2,
+                            in float3 INViewBinormal : TEXCOORD3,
+                            in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    float3 Nn = SampleNormalMap(INUV);
+    float4 diffuseColor = TZ_TEX2D(diffuse, INUV);
+
+    float3 diffContrib;
+    light_contribution(INViewNormal,
+                       INViewTangent,
+                       INViewBinormal,
+                       INViewPosition,
+                       Nn,
+                       diffContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = (diffuseColor.xyz * diffContrib) * attenuation;
+    return INColor * float4(result, diffuseColor.w);
+}
+
+float4 fp_normalmap_alphatest_shadows(in float4 INColor   : COLOR,
+                                      in float2 INUV      : TEXCOORD0,
+                                      in float3 INViewNormal   : TEXCOORD1,
+                                      in float3 INViewTangent  : TEXCOORD2,
+                                      in float3 INViewBinormal : TEXCOORD3,
+                                      in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    float4 diffuseColor = TZ_TEX2D(diffuse, INUV);
+    if (INColor.w * diffuseColor.w < alphaRef)
+    {
+        discard;
+    }
+
+    float3 Nn = SampleNormalMap(INUV);
+
+    float3 diffContrib;
+    light_contribution(INViewNormal,
+                       INViewTangent,
+                       INViewBinormal,
+                       INViewPosition,
+                       Nn,
+                       diffContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = (diffuseColor.xyz * diffContrib) * attenuation;
+    return INColor * float4(result, diffuseColor.w);
+}
+
+float4 fp_normalmap_specularmap_shadows(in float4 INColor   : COLOR,
+                                        in float2 INUV      : TEXCOORD0,
+                                        in float3 INViewNormal   : TEXCOORD1,
+                                        in float3 INViewTangent  : TEXCOORD2,
+                                        in float3 INViewBinormal : TEXCOORD3,
+                                        in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    float3 Nn = SampleNormalMap(INUV);
+    float4 diffuseColor = TZ_TEX2D(diffuse, INUV);
+    float3 specularColor = TZ_TEX2D(specular_map, INUV).xyz;
+
+    float3 diffContrib, specContrib;
+    light_contribution_specular(INViewNormal,
+                                INViewTangent,
+                                INViewBinormal,
+                                INViewPosition,
+                                Nn,
+                                diffContrib,
+                                specContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = ((specularColor * specContrib) + (diffuseColor.xyz * diffContrib)) * attenuation;
+    return INColor * float4(result, diffuseColor.w);
+}
+
+float4 fp_normalmap_specularmap_alphatest_shadows(in float4 INColor   : COLOR,
+                                                  in float2 INUV      : TEXCOORD0,
+                                                  in float3 INViewNormal   : TEXCOORD1,
+                                                  in float3 INViewTangent  : TEXCOORD2,
+                                                  in float3 INViewBinormal : TEXCOORD3,
+                                                  in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    float4 diffuseColor = TZ_TEX2D(diffuse, INUV);
+    if (INColor.w * diffuseColor.w < alphaRef)
+    {
+        discard;
+    }
+
+    float3 Nn = SampleNormalMap(INUV);
+    float3 specularColor = TZ_TEX2D(specular_map, INUV).xyz;
+
+    float3 diffContrib, specContrib;
+    light_contribution_specular(INViewNormal,
+                                INViewTangent,
+                                INViewBinormal,
+                                INViewPosition,
+                                Nn,
+                                diffContrib,
+                                specContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = ((specularColor * specContrib) + (diffuseColor.xyz * diffContrib)) * attenuation;
+    return INColor * float4(result, diffuseColor.w);
+}
+
+float4 fp_normalmap_specularmap_alphamap_shadows(in float4 INColor   : COLOR,
+                                                 in float2 INUV      : TEXCOORD0,
+                                                 in float3 INViewNormal   : TEXCOORD1,
+                                                 in float3 INViewTangent  : TEXCOORD2,
+                                                 in float3 INViewBinormal : TEXCOORD3,
+                                                 in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    float alpha = TZ_TEX2D(alpha_map, INUV).a;
+    if (INColor.w * alpha < alphaRef)
+    {
+        discard;
+    }
+
+    float3 Nn = SampleNormalMap(INUV);
+    float4 diffuseColor = TZ_TEX2D(diffuse, INUV);
+    float3 specularColor = TZ_TEX2D(specular_map, INUV).xyz;
+
+    float3 diffContrib, specContrib;
+    light_contribution_specular(INViewNormal,
+                                INViewTangent,
+                                INViewBinormal,
+                                INViewPosition,
+                                Nn,
+                                diffContrib,
+                                specContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = ((specularColor * specContrib) + (diffuseColor.xyz * diffContrib)) * attenuation;
+    return INColor * float4(result, alpha);
+}
+
+float4 fp_normalmap_glowmap_shadows(in float4 INColor   : COLOR,
+                                    in float2 INUV      : TEXCOORD0,
+                                    in float3 INViewNormal   : TEXCOORD1,
+                                    in float3 INViewTangent  : TEXCOORD2,
+                                    in float3 INViewBinormal : TEXCOORD3,
+                                    in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    // glowmap is applied on ambient pass
+    float3 Nn = SampleNormalMap(INUV);
+    float3 diffuseColor = TZ_TEX2D(diffuse, INUV).xyz;
+
+    float3 diffContrib;
+    light_contribution(INViewNormal,
+                       INViewTangent,
+                       INViewBinormal,
+                       INViewPosition,
+                       Nn,
+                       diffContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = (diffuseColor * diffContrib) * attenuation;
+    return float4(result, INColor.w);
+}
+
+float4 fp_normalmap_specularmap_glowmap_shadows(in float4 INColor   : COLOR,
+                                                in float2 INUV      : TEXCOORD0,
+                                                in float3 INViewNormal   : TEXCOORD1,
+                                                in float3 INViewTangent  : TEXCOORD2,
+                                                in float3 INViewBinormal : TEXCOORD3,
+                                                in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    // glowmap is applied on ambient pass
+    float3 Nn = SampleNormalMap(INUV);
+    float3 diffuseColor = TZ_TEX2D(diffuse, INUV).xyz;
+    float3 specularColor = TZ_TEX2D(specular_map, INUV).xyz;
+
+    float3 diffContrib, specContrib;
+    light_contribution_specular(INViewNormal,
+                                INViewTangent,
+                                INViewBinormal,
+                                INViewPosition,
+                                Nn,
+                                diffContrib,
+                                specContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = ((specularColor * specContrib) + (diffuseColor * diffContrib)) * attenuation;
+    return float4(result, INColor.w);
+}
+
+float4 fp_rxgb_normalmap_specularmap_shadows(in float4 INColor   : COLOR,
+                                             in float2 INUV      : TEXCOORD0,
+                                             in float3 INViewNormal   : TEXCOORD1,
+                                             in float3 INViewTangent  : TEXCOORD2,
+                                             in float3 INViewBinormal : TEXCOORD3,
+                                             in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    float3 Nn = SampleNormalMapRXGB(INUV);
+    float4 diffuseColor = TZ_TEX2D(diffuse, INUV);
+    float3 specularColor = TZ_TEX2D(specular_map, INUV).xyz;
+
+    float3 diffContrib, specContrib;
+    light_contribution_specular(INViewNormal,
+                                INViewTangent,
+                                INViewBinormal,
+                                INViewPosition,
+                                Nn,
+                                diffContrib,
+                                specContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = ((specularColor * specContrib) + (diffuseColor.xyz * diffContrib)) * attenuation;
+    return INColor * float4(result, diffuseColor.w);
+}
+
+float4 fp_rxgb_normalmap_specularmap_alphatest_shadows(in float4 INColor   : COLOR,
+                                                       in float2 INUV      : TEXCOORD0,
+                                                       in float3 INViewNormal   : TEXCOORD1,
+                                                       in float3 INViewTangent  : TEXCOORD2,
+                                                       in float3 INViewBinormal : TEXCOORD3,
+                                                       in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    float4 diffuseColor = TZ_TEX2D(diffuse, INUV);
+    if (INColor.w * diffuseColor.w < alphaRef)
+    {
+        discard;
+    }
+
+    float3 Nn = SampleNormalMapRXGB(INUV);
+    float3 specularColor = TZ_TEX2D(specular_map, INUV).xyz;
+
+    float3 diffContrib, specContrib;
+    light_contribution_specular(INViewNormal,
+                                INViewTangent,
+                                INViewBinormal,
+                                INViewPosition,
+                                Nn,
+                                diffContrib,
+                                specContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = ((specularColor * specContrib) + (diffuseColor.xyz * diffContrib)) * attenuation;
+    return INColor * float4(result, diffuseColor.w);
+}
+
+float4 fp_rxgb_normalmap_glowmap_shadows(in float4 INColor   : COLOR,
+                                         in float2 INUV      : TEXCOORD0,
+                                         in float3 INViewNormal   : TEXCOORD1,
+                                         in float3 INViewTangent  : TEXCOORD2,
+                                         in float3 INViewBinormal : TEXCOORD3,
+                                         in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    // glowmap is applied on ambient pass with the material color
+    float3 Nn = SampleNormalMapRXGB(INUV);
+    float3 diffuseColor = TZ_TEX2D(diffuse, INUV).xyz;
+
+    float3 diffContrib;
+    light_contribution(INViewNormal,
+                       INViewTangent,
+                       INViewBinormal,
+                       INViewPosition,
+                       Nn,
+                       diffContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = (diffuseColor * diffContrib) * attenuation;
+    return float4(result, INColor.w);
+}
+
+float4 fp_rxgb_normalmap_shadows(in float4 INColor   : COLOR,
+                                 in float2 INUV      : TEXCOORD0,
+                                 in float3 INViewNormal   : TEXCOORD1,
+                                 in float3 INViewTangent  : TEXCOORD2,
+                                 in float3 INViewBinormal : TEXCOORD3,
+                                 in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    float3 Nn = SampleNormalMapRXGB(INUV);
+    float4 diffuseColor = TZ_TEX2D(diffuse, INUV);
+
+    float3 diffContrib;
+    light_contribution(INViewNormal,
+                       INViewTangent,
+                       INViewBinormal,
+                       INViewPosition,
+                       Nn,
+                       diffContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = (diffuseColor.xyz * diffContrib) * attenuation;
+    return INColor * float4(result, diffuseColor.w);
+}
+
+float4 fp_rxgb_normalmap_alphatest_shadows(in float4 INColor   : COLOR,
+                                           in float2 INUV      : TEXCOORD0,
+                                           in float3 INViewNormal   : TEXCOORD1,
+                                           in float3 INViewTangent  : TEXCOORD2,
+                                           in float3 INViewBinormal : TEXCOORD3,
+                                           in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    float4 diffuseColor = TZ_TEX2D(diffuse, INUV);
+    if (INColor.w * diffuseColor.w < alphaRef)
+    {
+        discard;
+    }
+
+    float3 Nn = SampleNormalMapRXGB(INUV);
+
+    float3 diffContrib;
+    light_contribution(INViewNormal,
+                       INViewTangent,
+                       INViewBinormal,
+                       INViewPosition,
+                       Nn,
+                       diffContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = (diffuseColor.xyz * diffContrib) * attenuation;
+    return INColor * float4(result, diffuseColor.w);
+}
+
+float4 fp_rxgb_normalmap_specularmap_glowmap_shadows(in float4 INColor   : COLOR,
+                                                     in float2 INUV      : TEXCOORD0,
+                                                     in float3 INViewNormal   : TEXCOORD1,
+                                                     in float3 INViewTangent  : TEXCOORD2,
+                                                     in float3 INViewBinormal : TEXCOORD3,
+                                                     in float3 INViewPosition : TEXCOORD4) : TZ_OUT_COLOR
+{
+    // glowmap is applied on ambient pass with the material color
+    float3 Nn = SampleNormalMapRXGB(INUV);
+    float3 diffuseColor = TZ_TEX2D(diffuse, INUV).xyz;
+    float3 specularColor = TZ_TEX2D(specular_map, INUV).xyz;
+
+    float3 diffContrib, specContrib;
+    light_contribution_specular(INViewNormal,
+                                INViewTangent,
+                                INViewBinormal,
+                                INViewPosition,
+                                Nn,
+                                diffContrib,
+                                specContrib);
+
+    float attenuation = ApplyShadowAttenuation(INViewPosition);
+    float3 result = ((specularColor * specContrib) + (diffuseColor * diffContrib)) * attenuation;
+    return float4(result, INColor.w);
+}
+
+technique blinn_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_blinn();
+        FragmentProgram = compile latest fp_blinn_shadows();
+    }
+}
+
+technique blinn_shadows_nocull
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = false;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_blinn();
+        FragmentProgram = compile latest fp_blinn_shadows();
+    }
+}
+
+technique blinn_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_blinn_skinned();
+        FragmentProgram = compile latest fp_blinn_shadows();
+    }
+}
+
+technique blinn_skinned_shadows_nocull
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = false;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_blinn_skinned();
+        FragmentProgram = compile latest fp_blinn_shadows();
+    }
+}
+
+technique flat_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_flat();
+        FragmentProgram = compile latest fp_flat_shadows();
+    }
+}
+
+technique flat_shadows_nocull
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = false;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_flat();
+        FragmentProgram = compile latest fp_flat_shadows();
+    }
+}
+
+technique flat_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_flat_skinned();
+        FragmentProgram = compile latest fp_flat_shadows();
+    }
+}
+
+technique flat_skinned_shadows_nocull
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = false;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_flat_skinned();
+        FragmentProgram = compile latest fp_flat_shadows();
+    }
+}
+
+technique normalmap_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_normalmap_shadows();
+    }
+}
+
+technique normalmap_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_normalmap_shadows();
+    }
+}
+
+technique normalmap_specularmap_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_normalmap_specularmap_shadows();
+    }
+}
+
+technique normalmap_specularmap_alphamap_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_normalmap_specularmap_alphamap_shadows();
+    }
+}
+
+technique normalmap_alphatest_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_normalmap_alphatest_shadows();
+    }
+}
+
+technique normalmap_specularmap_alphatest_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_normalmap_specularmap_alphatest_shadows();
+    }
+}
+
+technique normalmap_specularmap_alphatest_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_normalmap_specularmap_alphatest_shadows();
+    }
+}
+
+technique normalmap_specularmap_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_normalmap_specularmap_shadows();
+    }
+}
+
+technique normalmap_specularmap_alphamap_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_normalmap_specularmap_alphamap_shadows();
+    }
+}
+
+technique normalmap_specularmap_glowmap_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_normalmap_specularmap_glowmap_shadows();
+    }
+}
+
+technique normalmap_specularmap_glowmap_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_normalmap_specularmap_glowmap_shadows();
+    }
+}
+
+technique normalmap_glowmap_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_normalmap_glowmap_shadows();
+    }
+}
+
+technique normalmap_glowmap_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_normalmap_glowmap_shadows();
+    }
+}
+
+technique rxgb_normalmap_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_rxgb_normalmap_shadows();
+    }
+}
+
+technique rxgb_normalmap_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_rxgb_normalmap_shadows();
+    }
+}
+
+technique rxgb_normalmap_specularmap_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_rxgb_normalmap_specularmap_shadows();
+    }
+}
+
+technique rxgb_normalmap_specularmap_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_rxgb_normalmap_specularmap_shadows();
+    }
+}
+
+technique rxgb_normalmap_alphatest_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_rxgb_normalmap_alphatest_shadows();
+    }
+}
+
+technique rxgb_normalmap_alphatest_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_rxgb_normalmap_alphatest_shadows();
+    }
+}
+
+technique rxgb_normalmap_specularmap_alphatest_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_rxgb_normalmap_specularmap_alphatest_shadows();
+    }
+}
+
+technique rxgb_normalmap_specularmap_alphatest_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_rxgb_normalmap_specularmap_alphatest_shadows();
+    }
+}
+
+
+technique rxgb_normalmap_glowmap_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_rxgb_normalmap_glowmap_shadows();
+    }
+}
+
+technique rxgb_normalmap_glowmap_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_rxgb_normalmap_glowmap_shadows();
+    }
+}
+
+technique rxgb_normalmap_specularmap_glowmap_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap();
+        FragmentProgram = compile latest fp_rxgb_normalmap_specularmap_glowmap_shadows();
+    }
+}
+
+technique rxgb_normalmap_specularmap_glowmap_skinned_shadows
+{
+    pass
+    {
+        DepthTestEnable = true;
+        DepthFunc       = LEqual;
+        DepthMask       = false;
+        CullFaceEnable  = true;
+        CullFace        = Back;
+        BlendEnable     = true;
+        BlendFunc       = int2(One, One);
+
+        VertexProgram   = compile latest vp_normalmap_skinned();
+        FragmentProgram = compile latest fp_rxgb_normalmap_specularmap_glowmap_shadows();
+    }
+}
