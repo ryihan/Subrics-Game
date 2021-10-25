@@ -9,3 +9,5 @@
 *.dll
 *.txt
 *.mft
+*.material
+GamePlay/samples/character/res/pvrtc/tableleg3.pvr
