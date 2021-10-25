@@ -1,4 +1,6 @@
 
+#ifndef BOOST_MPL_VECTOR_AUX_TAG_HPP_INCLUDED
+#define BOOST_MPL_VECTOR_AUX_TAG_HPP_INCLUDED
 #include <boost/mpl/aux_/config/typeof.hpp>
 #include <boost/mpl/aux_/nttp_decl.hpp>
 
